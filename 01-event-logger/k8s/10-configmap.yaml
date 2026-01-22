@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eventlog-app
+  namespace: eventlog
+data:
+  main.py: |
+    from fastapi import FastAPI
+    from pydantic import BaseModel
+    import sqlite3, os, time
+    from prometheus_client import Counter, Histogram, generate_latest
+
+    DB_PATH = os.environ.get("DB_PATH", "/data/events.db")
+    app = FastAPI()
+
+    reqs = Counter("http_requests_total", "Total HTTP requests", ["path", "method", "status"])
+    latency = Histogram("http_request_latency_seconds", "Request latency", ["path"])
+
+    class EventIn(BaseModel):
+      text: str
+
+    def init_db():
+      os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+      with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, ts INTEGER)")
+        conn.commit()
+
+    @app.on_event("startup")
+    def startup():
+      init_db()
+
+    @app.get("/health")
+    def health():
+      return {"ok": True, "ts": int(time.time())}
+
+    @app.post("/event")
+    def add_event(e: EventIn):
+      with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("INSERT INTO events(text, ts) VALUES(?, ?)", (e.text, int(time.time())))
+        conn.commit()
+      reqs.labels("/event", "POST", "200").inc()
+      return {"stored": True}
+
+    @app.get("/events")
+    def list_events(limit: int = 20):
+      with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT id, text, ts FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+      reqs.labels("/events", "GET", "200").inc()
+      return [{"id": r[0], "text": r[1], "ts": r[2]} for r in rows]
+
+    @app.get("/metrics")
+    def metrics():
+      reqs.labels("/metrics", "GET", "200").inc()
+      return generate_latest()

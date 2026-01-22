@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eventlog
+  namespace: eventlog
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eventlog
+  template:
+    metadata:
+      labels:
+        app: eventlog
+    spec:
+      containers:
+      - name: api
+        image: python:3.11-slim
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DB_PATH
+          value: /data/events.db
+        workingDir: /app
+        command: ["bash","-lc"]
+        args:
+          - |
+            pip install --no-cache-dir fastapi uvicorn prometheus-client && \
+            uvicorn main:app --host 0.0.0.0 --port 8000
+        volumeMounts:
+        - name: code
+          mountPath: /app
+        - name: data
+          mountPath: /data
+        readinessProbe:
+          httpGet: { path: /health, port: 8000 }
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet: { path: /health, port: 8000 }
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      volumes:
+      - name: code
+        configMap:
+          name: eventlog-app
+      - name: data
+        emptyDir: {}

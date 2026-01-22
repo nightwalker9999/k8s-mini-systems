@@ -1,0 +1,305 @@
+     Welcome to the KodeKloud Hands-On lab                                                         
+    __ ______  ____  ________ __ __    ____  __  ______ 
+   / //_/ __ \/ __ \/ ____/ //_// /   / __ \/ / / / __ \
+  / ,< / / / / / / / __/ / ,<  / /   / / / / / / / / / /
+ / /| / /_/ / /_/ / /___/ /| |/ /___/ /_/ / /_/ / /_/ / 
+/_/ |_\____/_____/_____/_/ |_/_____/\____/\____/_____/  
+                                                        
+          All rights reserved                                                                       
+
+controlplane ~ ➜  kubectl get pv
+kubectl get pvc -A
+kubectl get deploy -A | grep eventlog || echo "no eventlog deployments"
+kubectl get svc -A | grep eventlog || echo "no eventlog services"
+No resources found
+No resources found
+no eventlog deployments
+no eventlog services
+
+controlplane ~ ➜  mkdir -p 01-event-logger/{k8s,app,scripts}
+cd 01-event-logger
+
+controlplane ~/01-event-logger ➜  cat > k8s/00-namespace.yaml <<'YAML'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: eventlog
+YAML
+
+controlplane ~/01-event-logger ➜  ls
+app  k8s  scripts
+
+controlplane ~/01-event-logger ➜  cd k8s/
+
+controlplane ~/01-event-logger/k8s ➜  ls
+00-namespace.yaml
+
+controlplane ~/01-event-logger/k8s ➜  cd ..
+
+controlplane ~/01-event-logger ➜  kubectl apply -f k8s/00-namespace.yaml
+kubectl get ns eventlog
+namespace/eventlog created
+NAME       STATUS   AGE
+eventlog   Active   0s
+
+controlplane ~/01-event-logger ➜  cat > k8s/10-configmap.yaml <<'YAML'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eventlog-app
+  namespace: eventlog
+data:
+  main.py: |
+    from fastapi import FastAPI
+    from pydantic import BaseModel
+    import sqlite3, os, time
+    from prometheus_client import Counter, Histogram, generate_latest
+
+    DB_PATH = os.environ.get("DB_PATH", "/data/events.db")
+    app = FastAPI()
+
+    reqs = Counter("http_requests_total", "Total HTTP requests", ["path", "method", "status"])
+    latency = Histogram("http_request_latency_seconds", "Request latency", ["path"])
+
+    class EventIn(BaseModel):
+      text: str
+
+    def init_db():
+      os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+      with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, ts INTEGER)")
+        conn.commit()
+
+    @app.on_event("startup")
+    def startup():
+      init_db()
+
+    @app.get("/health")
+    def health():
+      return {"ok": True, "ts": int(time.time())}
+
+    @app.post("/event")
+    def add_event(e: EventIn):
+      with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("INSERT INTO events(text, ts) VALUES(?, ?)", (e.text, int(time.time())))
+        conn.commit()
+      reqs.labels("/event", "POST", "200").inc()
+YAML  return generate_latest()"GET", "200").inc()2]} for r in rows]BY id DESC LIMIT ?", (limit,)).f
+
+controlplane ~/01-event-logger ➜  ls
+app  k8s  scripts
+
+controlplane ~/01-event-logger ➜  ls k8s/
+00-namespace.yaml  10-configmap.yaml  
+
+controlplane ~/01-event-logger ➜  ls k8s/
+00-namespace.yaml  10-configmap.yaml
+
+controlplane ~/01-event-logger ➜  cat k8s/10-configmap.yaml 
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eventlog-app
+  namespace: eventlog
+data:
+  main.py: |
+    from fastapi import FastAPI
+    from pydantic import BaseModel
+    import sqlite3, os, time
+    from prometheus_client import Counter, Histogram, generate_latest
+
+    DB_PATH = os.environ.get("DB_PATH", "/data/events.db")
+    app = FastAPI()
+
+    reqs = Counter("http_requests_total", "Total HTTP requests", ["path", "method", "status"])
+    latency = Histogram("http_request_latency_seconds", "Request latency", ["path"])
+
+    class EventIn(BaseModel):
+      text: str
+
+    def init_db():
+      os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+      with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, ts INTEGER)")
+        conn.commit()
+
+    @app.on_event("startup")
+    def startup():
+      init_db()
+
+    @app.get("/health")
+    def health():
+      return {"ok": True, "ts": int(time.time())}
+
+    @app.post("/event")
+    def add_event(e: EventIn):
+      with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("INSERT INTO events(text, ts) VALUES(?, ?)", (e.text, int(time.time())))
+        conn.commit()
+      reqs.labels("/event", "POST", "200").inc()
+      return {"stored": True}
+
+    @app.get("/events")
+    def list_events(limit: int = 20):
+      with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT id, text, ts FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+      reqs.labels("/events", "GET", "200").inc()
+      return [{"id": r[0], "text": r[1], "ts": r[2]} for r in rows]
+
+    @app.get("/metrics")
+    def metrics():
+      reqs.labels("/metrics", "GET", "200").inc()
+      return generate_latest()
+
+controlplane ~/01-event-logger ➜  k apply -f k8s/10-configmap.yaml 
+configmap/eventlog-app created
+
+controlplane ~/01-event-logger ➜  k -n eventlog get cm eventlog-app 
+NAME           DATA   AGE
+eventlog-app   1      20s
+
+controlplane ~/01-event-logger ➜  cat > k8s/30-deployment.yaml <<'YAML'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eventlog
+  namespace: eventlog
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eventlog
+  template:
+    metadata:
+      labels:
+        app: eventlog
+    spec:
+      containers:
+      - name: api
+        image: python:3.11-slim
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DB_PATH
+          value: /data/events.db
+        workingDir: /app
+        command: ["bash","-lc"]
+        args:
+          - |
+            pip install --no-cache-dir fastapi uvicorn prometheus-client && \
+            uvicorn main:app --host 0.0.0.0 --port 8000
+        volumeMounts:
+        - name: code
+          mountPath: /app
+        - name: data
+          mountPath: /data
+        readinessProbe:
+          httpGet: { path: /health, port: 8000 }
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet: { path: /health, port: 8000 }
+          initialDelaySeconds: 15
+          periodSeconds: 10
+YAML    emptyDir: {}tlog-app
+
+controlplane ~/01-event-logger ➜  cat k8s/
+00-namespace.yaml   10-configmap.yaml   30-deployment.yaml  
+
+controlplane ~/01-event-logger ➜  cat k8s/30-deployment.yaml 
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eventlog
+  namespace: eventlog
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eventlog
+  template:
+    metadata:
+      labels:
+        app: eventlog
+    spec:
+      containers:
+      - name: api
+        image: python:3.11-slim
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DB_PATH
+          value: /data/events.db
+        workingDir: /app
+        command: ["bash","-lc"]
+        args:
+          - |
+            pip install --no-cache-dir fastapi uvicorn prometheus-client && \
+            uvicorn main:app --host 0.0.0.0 --port 8000
+        volumeMounts:
+        - name: code
+          mountPath: /app
+        - name: data
+          mountPath: /data
+        readinessProbe:
+          httpGet: { path: /health, port: 8000 }
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet: { path: /health, port: 8000 }
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      volumes:
+      - name: code
+        configMap:
+          name: eventlog-app
+      - name: data
+        emptyDir: {}
+
+controlplane ~/01-event-logger ➜  k apply -f k8s/30-deployment.yaml 
+deployment.apps/eventlog created
+
+controlplane ~/01-event-logger ➜  k -n eventlog get deploy eventlog 
+NAME       READY   UP-TO-DATE   AVAILABLE   AGE
+eventlog   0/1     1            0           10s
+
+controlplane ~/01-event-logger ➜  k -n eventlog rollout status deploy eventlog 
+deployment "eventlog" successfully rolled out
+
+controlplane ~/01-event-logger ➜  k -n eventlog get deploy eventlog 
+NAME       READY   UP-TO-DATE   AVAILABLE   AGE
+eventlog   1/1     1            1           40s
+
+controlplane ~/01-event-logger ➜  kubectl -n eventlog get pods -o wide
+NAME                        READY   STATUS    RESTARTS   AGE   IP           NODE     NOMINATED NODE   READINESS GATES
+eventlog-6c9fd4b986-khn9s   1/1     Running   0          47s   172.17.1.2   node01   <none>           <none>
+
+controlplane ~/01-event-logger ➜  kubectl -n eventlog get pods -o wide
+NAME                        READY   STATUS    RESTARTS   AGE   IP           NODE     NOMINATED NODE   READINESS GATES
+eventlog-6c9fd4b986-khn9s   1/1     Running   0          65s   172.17.1.2   node01   <none>           <none>
+
+controlplane ~/01-event-logger ➜  cat > k8s/40-service.yaml <<'YAML'
+apiVersion: v1
+kind: Service
+metadata:
+  name: eventlog-svc
+  namespace: eventlog
+spec:
+  selector:
+    app: eventlog
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8000
+YAML
+
+controlplane ~/01-event-logger ➜  k apply -f k8s/40-service.yaml 
+service/eventlog-svc created
+
+controlplane ~/01-event-logger ➜  k -n eventlog get svc eventlog-svc 
+NAME           TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE
+eventlog-svc   ClusterIP   172.20.183.204   <none>        80/TCP    9s
+
+controlplane ~/01-event-logger ➜  kubectl -n eventlog port-forward svc/eventlog-svc 8080:80
+Forwarding from [::1]:8080 -> 8000
+
