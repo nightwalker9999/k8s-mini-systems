@@ -45,4 +45,5 @@ spec:
         configMap:
           name: eventlog-app
       - name: data
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: eventlog-pvc
